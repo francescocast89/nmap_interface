@@ -27,14 +27,14 @@ type Scanner struct {
 	stderr, stdout bufio.Scanner
 }
 
-var defaultArgs = []string{"-oX", "-"}
+var defaultArgs = []string{"-oX", "-", "--privileged"}
 
 func NewScanner(args []string) (*Scanner, error) {
 
 	s := &Scanner{}
 
 	if len(args) == 0 {
-		return nil, fmt.Errorf("provided 0 arguments")
+		return nil, fmt.Errorf("there must be at least one argument")
 	}
 	s.args = append(args, defaultArgs...)
 	trimmedToolPath := strings.TrimSpace(s.path)
@@ -82,15 +82,18 @@ func choosePorts(result *Run, filter func(Port) bool) *Run {
 }
 
 func (s *Scanner) Run() (result *Run, warnings []string, err error) {
+
+	s.cmd = exec.Command(s.path, s.args...)
+
 	var (
 		stdout, stderr bytes.Buffer
 	)
-	s.cmd = exec.Command(s.path, s.args...)
+
 	s.cmd.Stdout = &stdout
 	s.cmd.Stderr = &stderr
 
 	if err := s.cmd.Start(); err != nil {
-		return nil, nil, fmt.Errorf("Run(): error during start: ", err)
+		return nil, nil, fmt.Errorf("error during start: %s", err)
 	}
 
 	done := make(chan error, 1)
@@ -110,7 +113,7 @@ func (s *Scanner) Run() (result *Run, warnings []string, err error) {
 		}
 		result, err := Parse(stdout.Bytes())
 		if err != nil {
-			return nil, warnings, fmt.Errorf("error during parse: ", err)
+			return nil, warnings, fmt.Errorf("error during the xml parsing: %s", err)
 		}
 		if s.portFilter != nil {
 			result = choosePorts(result, s.portFilter)
@@ -123,12 +126,43 @@ func (s *Scanner) Run() (result *Run, warnings []string, err error) {
 	}
 }
 
-func main() {
-	s, err := NewScanner([]string{"-PR", "-sn", "-n", "192.168.73.0/24"})
+func (s *Scanner) RunAsync() error {
+	s.cmd = exec.Command(s.path, s.args...)
+
+	stderr, err := s.cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("unable to get error output from asynchronous nmap run: %v", err)
+	}
+
+	stdout, err := s.cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("unable to get standard output from asynchronous nmap run: %v", err)
+	}
+
+	s.stdout = *bufio.NewScanner(stdout)
+	s.stderr = *bufio.NewScanner(stderr)
+
+	if err := s.cmd.Start(); err != nil {
+		return fmt.Errorf("error during start: %s", err)
+	}
+
+	go func() {
+		<-s.ctx.Done()
+		_ = s.cmd.Process.Kill()
+	}()
+	return nil
+}
+
+func HostDiscovery(networkAddr string) (result *Run, warnings []string, err error) {
+	s, err := NewScanner([]string{"-PR", "-sn", "-n", networkAddr})
 	if err != nil {
 		fmt.Println(err)
 	}
-	result, warnings, err := s.Run()
+	return s.Run()
+}
+
+func main() {
+	result, warnings, err := HostDiscovery("192.168.73.0/24")
 	if err != nil {
 		fmt.Println("error:", err)
 	}
@@ -136,7 +170,9 @@ func main() {
 		fmt.Println("warnings: ", warnings)
 	}
 	for _, h := range result.Hosts {
-		fmt.Println(h.Addresses)
-	}
+		for _, a := range h.Addresses {
+			fmt.Printf("%s : %s \n", a.AddrType, a.Addr)
 
+		}
+	}
 }
