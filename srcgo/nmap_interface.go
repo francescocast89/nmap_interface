@@ -4,16 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
-// Streamer constantly streams the stdout.
-type Streamer interface {
-	Write(d []byte) (int, error)
-	Bytes() []byte
-}
+var ErrScanTimeout = errors.New("nmap scan timed out")
+var ErrNmapNotInstalled = errors.New("nmap was not found")
 
 // https://github.com/Ullaakut/nmap/blob/master/nmap.go
 // Scanner represents an Nmap scanner.
@@ -27,21 +26,111 @@ type Scanner struct {
 	stderr, stdout bufio.Scanner
 }
 
+type ScannerOption func(*Scanner)
+
+func WithContext(ctx context.Context) ScannerOption {
+	return func(s *Scanner) {
+		s.ctx = ctx
+	}
+}
+
+func WithPath(binaryPath string) ScannerOption {
+	return func(s *Scanner) {
+		s.path = binaryPath
+	}
+}
+
+func WithCustomArguments(args ...string) ScannerOption {
+	return func(s *Scanner) {
+		s.args = append(s.args, args...)
+	}
+}
+func WithTargets(targets ...string) ScannerOption {
+	return func(s *Scanner) {
+		s.args = append(s.args, targets...)
+	}
+}
+func WithTargetExclusion(target string) ScannerOption {
+	return func(s *Scanner) {
+		s.args = append(s.args, "--exclude")
+		s.args = append(s.args, target)
+	}
+}
+func WithFilterPort(portFilter func(Port) bool) ScannerOption {
+	return func(s *Scanner) {
+		s.portFilter = portFilter
+	}
+}
+func WithFilterHost(hostFilter func(Host) bool) ScannerOption {
+	return func(s *Scanner) {
+		s.hostFilter = hostFilter
+	}
+}
+
+func WithPorts(ports ...string) ScannerOption {
+	portList := strings.Join(ports, ",")
+
+	return func(s *Scanner) {
+		// Find if any port is set.
+		var place int = -1
+		for p, value := range s.args {
+			if value == "-p" {
+				place = p
+				break
+			}
+		}
+		// Add ports.
+		if place >= 0 {
+			portList = s.args[place+1] + "," + portList
+			s.args[place+1] = portList
+		} else {
+			s.args = append(s.args, "-p")
+			s.args = append(s.args, portList)
+		}
+	}
+}
+
+func WithPortExclusions(ports ...string) ScannerOption {
+	portList := strings.Join(ports, ",")
+
+	return func(s *Scanner) {
+		s.args = append(s.args, "--exclude-ports")
+		s.args = append(s.args, portList)
+	}
+}
+
+/*** Timing and performance ***/
+
+type Timing int16
+
+const (
+	TimingSlowest    Timing = 0
+	TimingSneaky     Timing = 1
+	TimingPolite     Timing = 2
+	TimingNormal     Timing = 3
+	TimingAggressive Timing = 4
+	TimingFastest    Timing = 5
+)
+
+func WithTimingTemplate(timing Timing) ScannerOption {
+	return func(s *Scanner) {
+		s.args = append(s.args, fmt.Sprintf("-T%d", timing))
+	}
+}
+
 var defaultArgs = []string{"-oX", "-", "--privileged"}
 
-func NewScanner(args []string) (*Scanner, error) {
+func NewScanner(options ...ScannerOption) (*Scanner, error) {
 
 	s := &Scanner{}
-
-	if len(args) == 0 {
-		return nil, fmt.Errorf("there must be at least one argument")
+	for _, option := range options {
+		option(s)
 	}
-	s.args = append(args, defaultArgs...)
-	trimmedToolPath := strings.TrimSpace(s.path)
-	if len(trimmedToolPath) == 0 {
+
+	if len(strings.TrimSpace(s.path)) == 0 {
 		p, err := exec.LookPath("nmap")
 		if err != nil {
-			return nil, fmt.Errorf("unable to find %s: %v", s.path, err)
+			return nil, ErrNmapNotInstalled
 		}
 		s.path = p
 	}
@@ -74,7 +163,6 @@ func choosePorts(result *Run, filter func(Port) bool) *Run {
 				filteredPorts = append(filteredPorts, port)
 			}
 		}
-
 		result.Hosts[idx].Ports = filteredPorts
 	}
 
@@ -82,16 +170,14 @@ func choosePorts(result *Run, filter func(Port) bool) *Run {
 }
 
 func (s *Scanner) Run() (result *Run, warnings []string, err error) {
-
-	s.cmd = exec.Command(s.path, s.args...)
-
 	var (
 		stdout, stderr bytes.Buffer
 	)
+	args := append(s.args, defaultArgs...)
+	s.cmd = exec.Command(s.path, args...)
 
 	s.cmd.Stdout = &stdout
 	s.cmd.Stderr = &stderr
-
 	if err := s.cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("error during start: %s", err)
 	}
@@ -105,7 +191,7 @@ func (s *Scanner) Run() (result *Run, warnings []string, err error) {
 
 	case <-s.ctx.Done():
 		_ = s.cmd.Process.Kill()
-		return nil, nil, nil
+		return nil, warnings, s.ctx.Err()
 
 	case <-done:
 		if stderr.Len() > 0 {
@@ -126,53 +212,116 @@ func (s *Scanner) Run() (result *Run, warnings []string, err error) {
 	}
 }
 
-func (s *Scanner) RunAsync() error {
-	s.cmd = exec.Command(s.path, s.args...)
+// func (s *Scanner) RunAsync() error {
+// 	s.cmd = exec.Command(s.path, s.args...)
 
-	stderr, err := s.cmd.StderrPipe()
+// 	stderr, err := s.cmd.StderrPipe()
+// 	if err != nil {
+// 		return fmt.Errorf("unable to get error output from asynchronous nmap run: %v", err)
+// 	}
+
+// 	stdout, err := s.cmd.StdoutPipe()
+// 	if err != nil {
+// 		return fmt.Errorf("unable to get standard output from asynchronous nmap run: %v", err)
+// 	}
+
+// 	s.stdout = *bufio.NewScanner(stdout)
+// 	s.stderr = *bufio.NewScanner(stderr)
+
+// 	if err := s.cmd.Start(); err != nil {
+// 		return fmt.Errorf("error during start: %s", err)
+// 	}
+
+// 	go func() {
+// 		<-s.ctx.Done()
+// 		_ = s.cmd.Process.Kill()
+// 	}()
+// 	return nil
+// }
+
+func NetworkScan(netAddr string) (map[string]string, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hostsList := make(map[string]string)
+
+	s, err := NewScanner(WithCustomArguments("-PR", "-sn", "-n"), WithTargets(netAddr), WithContext(ctx))
 	if err != nil {
-		return fmt.Errorf("unable to get error output from asynchronous nmap run: %v", err)
+		return nil, err
 	}
-
-	stdout, err := s.cmd.StdoutPipe()
+	result, warnings, err := s.Run()
 	if err != nil {
-		return fmt.Errorf("unable to get standard output from asynchronous nmap run: %v", err)
+		switch err {
+		default:
+			return nil, fmt.Errorf("error during the scan process: %s", err)
+		case context.Canceled:
+			return nil, fmt.Errorf("scanner teminated: %s", err)
+		case context.DeadlineExceeded:
+			return nil, fmt.Errorf("scanner teminated: %s", err)
+		}
+	} else {
+		if len(warnings) > 0 {
+			fmt.Println("warnings: ", warnings)
+		}
+		for _, h := range result.Hosts {
+			var (
+				ipv4Addr, macAddr string
+			)
+			for _, a := range h.Addresses {
+				if a.AddrType == "mac" {
+					macAddr = a.Addr
+				}
+				if a.AddrType == "ipv4" {
+					ipv4Addr = a.Addr
+				}
+			}
+			if macAddr == "" {
+				macAddr = fmt.Sprintf("DUMMY_%s", ipv4Addr)
+			}
+			hostsList[macAddr] = ipv4Addr
+		}
 	}
+	return hostsList, nil
+}
 
-	s.stdout = *bufio.NewScanner(stdout)
-	s.stderr = *bufio.NewScanner(stderr)
-
-	if err := s.cmd.Start(); err != nil {
-		return fmt.Errorf("error during start: %s", err)
+func PortScan(hostAddr string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, err := NewScanner(WithCustomArguments("-sS", "-O", "-sV", "-p-", "--open"), WithTargets(hostAddr), WithContext(ctx))
+	if err != nil {
+		return err
 	}
+	result, warnings, err := s.Run()
+	if err != nil {
+		switch err {
+		default:
+			return fmt.Errorf("error during the scan process: %s", err)
+		case context.Canceled:
+			return fmt.Errorf("scanner teminated: %s", err)
+		case context.DeadlineExceeded:
+			return fmt.Errorf("scanner teminated: %s", err)
+		}
+	} else {
+		if len(warnings) > 0 {
+			fmt.Println("warnings: ", warnings)
+		}
+		for _, h := range result.Hosts {
+			for _, p := range h.Ports {
+				fmt.Printf("%0.d : %s \n", p.ID, p.Service)
+			}
+		}
 
-	go func() {
-		<-s.ctx.Done()
-		_ = s.cmd.Process.Kill()
-	}()
+	}
 	return nil
 }
 
-func HostDiscovery(networkAddr string) (result *Run, warnings []string, err error) {
-	s, err := NewScanner([]string{"-PR", "-sn", "-n", networkAddr})
-	if err != nil {
-		fmt.Println(err)
-	}
-	return s.Run()
-}
-
 func main() {
-	result, warnings, err := HostDiscovery("192.168.73.0/24")
-	if err != nil {
-		fmt.Println("error:", err)
+	if hostsList, err := NetworkScan("192.168.73.0/24"); err != nil {
+		fmt.Println(err)
+	} else {
+		fmt.Println(hostsList)
 	}
-	if len(warnings) > 0 {
-		fmt.Println("warnings: ", warnings)
-	}
-	for _, h := range result.Hosts {
-		for _, a := range h.Addresses {
-			fmt.Printf("%s : %s \n", a.AddrType, a.Addr)
-
-		}
-	}
+	// if err := PortScan("192.168.73.127"); err != nil {
+	// 	fmt.Println(err)
+	// }
 }
