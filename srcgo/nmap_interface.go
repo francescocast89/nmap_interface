@@ -212,32 +212,32 @@ func (s *Scanner) Run() (result *Run, warnings []string, err error) {
 	}
 }
 
-// func (s *Scanner) RunAsync() error {
-// 	s.cmd = exec.Command(s.path, s.args...)
+func (s *Scanner) RunAsync() error {
+	s.cmd = exec.Command(s.path, s.args...)
 
-// 	stderr, err := s.cmd.StderrPipe()
-// 	if err != nil {
-// 		return fmt.Errorf("unable to get error output from asynchronous nmap run: %v", err)
-// 	}
+	stderr, err := s.cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("unable to get error output from asynchronous nmap run: %v", err)
+	}
 
-// 	stdout, err := s.cmd.StdoutPipe()
-// 	if err != nil {
-// 		return fmt.Errorf("unable to get standard output from asynchronous nmap run: %v", err)
-// 	}
+	stdout, err := s.cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("unable to get standard output from asynchronous nmap run: %v", err)
+	}
 
-// 	s.stdout = *bufio.NewScanner(stdout)
-// 	s.stderr = *bufio.NewScanner(stderr)
+	s.stdout = *bufio.NewScanner(stdout)
+	s.stderr = *bufio.NewScanner(stderr)
 
-// 	if err := s.cmd.Start(); err != nil {
-// 		return fmt.Errorf("error during start: %s", err)
-// 	}
+	if err := s.cmd.Start(); err != nil {
+		return fmt.Errorf("error during start: %s", err)
+	}
 
-// 	go func() {
-// 		<-s.ctx.Done()
-// 		_ = s.cmd.Process.Kill()
-// 	}()
-// 	return nil
-// }
+	go func() {
+		<-s.ctx.Done()
+		_ = s.cmd.Process.Kill()
+	}()
+	return nil
+}
 
 func NetworkScan(netAddr string, ctx context.Context) (map[string]string, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -313,196 +313,4 @@ func PortScan(hostAddr string) error {
 
 	}
 	return nil
-}
-
-type JobID string
-
-type ExecutionFn func(ctx context.Context) (interface{}, error)
-
-type slot struct{}
-
-type Job struct {
-	Id     JobID
-	ExecFn ExecutionFn
-}
-type Result struct {
-	Value interface{}
-	Err   error
-	Id    JobID
-}
-
-// type WorkerPool struct {
-// 	workersCount int
-// 	jobs         chan Job
-// 	results      chan Result
-// 	slots        chan slot
-// 	Done         chan bool
-// }
-type WorkerPool struct {
-	workersCount int
-	jobs         chan Job
-	results      chan Result
-}
-
-func (j Job) execute(ctx context.Context) Result {
-	value, err := j.ExecFn(ctx)
-	if err != nil {
-		return Result{
-			Err: err,
-			Id:  j.Id,
-		}
-	}
-	return Result{
-		Value: value,
-		Id:    j.Id,
-	}
-}
-func NewWorkerPool(wcount int, ctx context.Context) WorkerPool {
-	fmt.Println("new worker pool")
-	wp := WorkerPool{
-		workersCount: wcount,
-		jobs:         make(chan Job, wcount),
-		results:      make(chan Result, wcount),
-	}
-	for i := 1; i <= wcount; i++ {
-		go wp.worker(i, ctx)
-	}
-	return wp
-}
-
-func (wp WorkerPool) worker(id int, ctx context.Context) {
-	fmt.Println("start worker")
-	for {
-		select {
-		case j := <-wp.jobs:
-			fmt.Printf("job %s started by worker %0.d \n", j.Id, id)
-			select {
-			case wp.results <- j.execute(ctx):
-				fmt.Printf("job %s executed by worker %0.d \n", j.Id, id)
-			case <-ctx.Done():
-				fmt.Println("worker terminated by context")
-				return
-			}
-		case <-ctx.Done():
-			fmt.Println("worker terminated by context")
-			return
-		}
-	}
-}
-
-// func NewWorkerPool(wcount int) WorkerPool {
-// 	fmt.Println("new worker pool")
-// 	wp := WorkerPool{
-// 		workersCount: wcount,
-// 		jobs:         make(chan Job),
-// 		results:      make(chan Result),
-// 		slots:        make(chan slot, wcount),
-// 		Done:         make(chan bool),
-// 	}
-// 	return wp
-// }
-// func (wp WorkerPool) StartDispatcher(ctx context.Context) {
-// 	fmt.Println("start dispatcher")
-// 	for {
-// 		select {
-// 		case j := <-wp.jobs:
-// 			fmt.Println("wp.job: ", j.Id)
-// 			fmt.Printf("%0.d / %0.d \n", len(wp.slots), cap(wp.slots))
-// 			select {
-// 			case wp.slots <- slot{}:
-// 				go func() { wp.results <- j.execute() }()
-// 				fmt.Println("job inserted: ", j.Id)
-// 			case <-ctx.Done():
-// 				fmt.Println("Dispatcher terminated by context")
-// 				return
-// 			}
-// 		case <-ctx.Done():
-// 			fmt.Println("Dispatcher terminated by context")
-// 			return
-// 		}
-// 	}
-// }
-// func (wp WorkerPool) StartCollector(ctx context.Context) {
-// 	fmt.Println("start collector")
-// 	for {
-// 		select {
-// 		case j := <-wp.results:
-// 			select {
-// 			case <-wp.slots:
-// 				fmt.Println(j.Id, j.Value)
-// 			case <-ctx.Done():
-// 				fmt.Println("Collector terminated by context")
-// 				return
-// 			}
-// 		case <-ctx.Done():
-// 			fmt.Println("Collector terminated by context")
-// 			return
-// 		}
-// 	}
-// }
-
-func (wp WorkerPool) StartCollector(ctx context.Context) {
-	for {
-		select {
-		case j := <-wp.results:
-			fmt.Println(j.Id, j.Value)
-		case <-ctx.Done():
-			fmt.Println("collector terminated by context")
-			return
-		}
-	}
-}
-func (wp WorkerPool) addJob(id string, f ExecutionFn) {
-	j := Job{
-		Id:     JobID(id),
-		ExecFn: f,
-	}
-	wp.jobs <- j
-}
-
-func main() {
-	done := make(chan bool)
-	// if hostsList, err := NetworkScan("192.168.73.0/24"); err != nil {
-	// 	fmt.Println(err)
-	// } else {
-	// 	fmt.Println(hostsList)
-	// }
-	// if err := PortScan("192.168.73.127"); err != nil {
-	// 	fmt.Println(err)
-	// }
-	ctx, cancel := context.WithCancel(context.Background())
-	wp := NewWorkerPool(3, ctx)
-	go wp.StartCollector(ctx)
-	go func() {
-		time.Sleep(12 * time.Millisecond)
-		cancel()
-	}()
-	wp.jobs <- Job{
-		Id: "Network Scan",
-		ExecFn: func(ctx context.Context) (interface{}, error) {
-			return NetworkScan("192.168.73.0/24", ctx)
-		},
-	}
-	// for i := 1; i <= 10; i++ {
-	// 	wp.addJob(
-	// 		fmt.Sprintf("%0.d", i),
-	// 		NetworkScan("192.168.73.0/24", WithContext(ctx)),
-	// 		// func(ctx context.Context) (interface{}, error) {
-	// 		// 	n := rand.Intn(10)
-	// 		// 	select {
-	// 		// 	case <-time.After(time.Duration(n) * time.Second):
-	// 		// 		return "hello", nil
-	// 		// 	case <-ctx.Done():
-	// 		// 		return nil, nil
-	// 		// 	}
-	// 		// },
-	// 	)
-	// }
-
-	for {
-		select {
-		case <-done:
-			return
-		}
-	}
 }
