@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"time"
 )
 
 var ErrScanTimeout = errors.New("nmap scan timed out")
@@ -236,81 +235,5 @@ func (s *Scanner) RunAsync() error {
 		<-s.ctx.Done()
 		_ = s.cmd.Process.Kill()
 	}()
-	return nil
-}
-
-func NetworkScan(netAddr string, ctx context.Context) (map[string]string, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	hostsList := make(map[string]string)
-
-	s, err := NewScanner(WithCustomArguments("-PR", "-sn", "-n"), WithTargets(netAddr), WithContext(ctx))
-	if err != nil {
-		return nil, err
-	}
-	result, warnings, err := s.Run()
-	if err != nil {
-		switch err {
-		default:
-			return nil, fmt.Errorf("error during the scan process: %s", err)
-		case context.Canceled:
-			return nil, fmt.Errorf("scanner teminated: %s", err)
-		case context.DeadlineExceeded:
-			return nil, fmt.Errorf("scanner teminated: %s", err)
-		}
-	} else {
-		if len(warnings) > 0 {
-			fmt.Println("warnings: ", warnings)
-		}
-		for _, h := range result.Hosts {
-			var (
-				ipv4Addr, macAddr string
-			)
-			for _, a := range h.Addresses {
-				if a.AddrType == "mac" {
-					macAddr = a.Addr
-				}
-				if a.AddrType == "ipv4" {
-					ipv4Addr = a.Addr
-				}
-			}
-			if macAddr == "" {
-				macAddr = fmt.Sprintf("DUMMY_%s", ipv4Addr)
-			}
-			hostsList[macAddr] = ipv4Addr
-		}
-	}
-	return hostsList, nil
-}
-
-func PortScan(hostAddr string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	s, err := NewScanner(WithCustomArguments("-sS", "-O", "-sV", "-p-", "--open"), WithTargets(hostAddr), WithContext(ctx))
-	if err != nil {
-		return err
-	}
-	result, warnings, err := s.Run()
-	if err != nil {
-		switch err {
-		default:
-			return fmt.Errorf("error during the scan process: %s", err)
-		case context.Canceled:
-			return fmt.Errorf("scanner teminated: %s", err)
-		case context.DeadlineExceeded:
-			return fmt.Errorf("scanner teminated: %s", err)
-		}
-	} else {
-		if len(warnings) > 0 {
-			fmt.Println("warnings: ", warnings)
-		}
-		for _, h := range result.Hosts {
-			for _, p := range h.Ports {
-				fmt.Printf("%0.d : %s \n", p.ID, p.Service)
-			}
-		}
-
-	}
 	return nil
 }
