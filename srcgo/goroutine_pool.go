@@ -38,17 +38,17 @@ func ToMap(x interface{}) map[string]string {
 	return res
 }
 
-func ToScannedHost(x interface{}) scannedHost {
-	v, ok := x.(scannedHost)
+func ToScannedHost(x interface{}) ScannedHost {
+	v, ok := x.(ScannedHost)
 	if !ok {
-		return scannedHost{}
+		return ScannedHost{}
 	}
 	return v
 }
 
-func ToScannedHostList(x interface{}) []scannedHost {
-	res := []scannedHost{}
-	v, ok := x.([]scannedHost)
+func ToScannedHostList(x interface{}) []ScannedHost {
+	res := []ScannedHost{}
+	v, ok := x.([]ScannedHost)
 	if !ok {
 		return res
 	}

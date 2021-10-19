@@ -23,7 +23,7 @@ func (ns *NetworkScanner) Execute() Result {
 	ctx, cancel := context.WithCancel(ns.ctx)
 	defer cancel()
 
-	hl := make([]scannedHost, 0)
+	hl := make([]ScannedHost, 0)
 
 	s, err := NewScanner(WithCustomArguments("-PR", "-sn", "-n"), WithTargets(ns.netAddr), WithContext(ctx))
 	if err != nil {

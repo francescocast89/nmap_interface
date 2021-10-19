@@ -2,30 +2,35 @@ package main
 
 import "fmt"
 
-type scannedPort struct {
-	Id      uint16
-	Service string
+type ScannedPort struct {
+	PortNumber uint16
+	Service    string
 }
 
-type scannedOS struct {
+type ScannedOS struct {
 	Name     string
 	Accuracy int
 }
 
-type scannedHost struct {
+type ScannedHost struct {
 	MacAddr  string
 	Ipv4Addr string
-	os       []scannedOS
-	ports    []scannedPort
+	os       []ScannedOS
+	ports    []ScannedPort
 }
 
-func NewScannedHost(h Host) *scannedHost {
-	sh := &scannedHost{}
+const (
+	AddrTypeIPV4 = "ipv4"
+	AddrTypeMAC  = "mac"
+)
+
+func NewScannedHost(h Host) *ScannedHost {
+	sh := &ScannedHost{}
 	for _, a := range h.Addresses {
-		if a.AddrType == "mac" {
+		if a.AddrType == AddrTypeMAC {
 			sh.MacAddr = a.Addr
 		}
-		if a.AddrType == "ipv4" {
+		if a.AddrType == AddrTypeIPV4 {
 			sh.Ipv4Addr = a.Addr
 		}
 	}
@@ -35,18 +40,18 @@ func NewScannedHost(h Host) *scannedHost {
 	return sh
 }
 
-func (sh *scannedHost) AddScannedPort(h Host) {
+func (sh *ScannedHost) AddScannedPort(h Host) {
 	for _, p := range h.Ports {
 		//fmt.Printf("%0.d : %s \n", p.ID, p.Service.Name)
-		sh.ports = append(sh.ports, scannedPort{p.ID, p.Service.Name})
+		sh.ports = append(sh.ports, ScannedPort{p.ID, p.Service.Name})
 	}
 
 }
 
-func (sh *scannedHost) AddScannedOS(h Host) {
+func (sh *ScannedHost) AddScannedOS(h Host) {
 	for _, o := range h.OS.Matches {
 		//fmt.Printf("%s, %0.d \n", o.Name, o.Accuracy)
-		sh.os = append(sh.os, scannedOS{o.Name, o.Accuracy})
+		sh.os = append(sh.os, ScannedOS{o.Name, o.Accuracy})
 	}
 
 }

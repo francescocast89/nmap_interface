@@ -11,7 +11,7 @@ func main() {
 	ctx := context.Background()
 
 	netScanResult := []Result{}
-	hostsList := []scannedHost{}
+	hostsList := []ScannedHost{}
 	wp := NewWorkerPool(1, ctx)
 	go wp.Run(ctx)
 	go wp.StartCollector(ctx, &netScanResult)

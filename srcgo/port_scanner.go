@@ -9,10 +9,10 @@ import (
 type PortScanner struct {
 	ctx  context.Context
 	id   JobID
-	host scannedHost
+	host ScannedHost
 }
 
-func NewPortScanner(ctx context.Context, id JobID, host scannedHost) *PortScanner {
+func NewPortScanner(ctx context.Context, id JobID, host ScannedHost) *PortScanner {
 	return &PortScanner{ctx, id, host}
 }
 
