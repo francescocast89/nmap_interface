@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 )
 
 type JobID string
@@ -25,94 +24,6 @@ type WorkerPool struct {
 	jobs         chan Job
 	results      chan Result
 	Done         chan bool
-}
-
-type NetworkScanner struct {
-	ctx     context.Context
-	id      JobID
-	netAddr string
-}
-
-type PortScanner struct {
-	ctx  context.Context
-	id   JobID
-	host scannedHost
-}
-
-func NewNetworkScanner(ctx context.Context, id JobID, netAddr string) *NetworkScanner {
-	return &NetworkScanner{ctx, id, netAddr}
-}
-
-func (ns *NetworkScanner) Id() JobID {
-	return ns.id
-}
-
-func (ns *NetworkScanner) Execute() Result {
-	ctx, cancel := context.WithCancel(ns.ctx)
-	defer cancel()
-
-	hl := make([]scannedHost, 0)
-
-	s, err := NewScanner(WithCustomArguments("-PR", "-sn", "-n"), WithTargets(ns.netAddr), WithContext(ctx))
-	if err != nil {
-		return Result{ns.id, err, nil}
-	}
-	result, warnings, err := s.Run()
-	if err != nil {
-		switch err {
-		default:
-			return Result{ns.id, fmt.Errorf("error during the scan process: %s", err), hl}
-		case context.Canceled:
-			return Result{ns.id, fmt.Errorf("scanner teminated: %s", err), hl}
-		case context.DeadlineExceeded:
-			return Result{ns.id, fmt.Errorf("scanner teminated: %s", err), hl}
-		}
-	} else {
-		if len(warnings) > 0 {
-			fmt.Println("warnings: ", warnings)
-		}
-		for _, h := range result.Hosts {
-			hl = append(hl, *NewScannedHost(h))
-		}
-	}
-	return Result{ns.id, nil, hl}
-}
-
-func NewPortScanner(ctx context.Context, id JobID, host scannedHost) *PortScanner {
-	return &PortScanner{ctx, id, host}
-}
-
-func (ps *PortScanner) Id() JobID {
-	return ps.id
-}
-func (ps *PortScanner) Execute() Result {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	s, err := NewScanner(WithCustomArguments("-sS", "-O", "-sV", "-p-", "--open"), WithTargets(ps.host.Ipv4Addr), WithContext(ctx))
-	if err != nil {
-		return Result{ps.id, err, nil}
-	}
-	result, warnings, err := s.Run()
-	if err != nil {
-		switch err {
-		default:
-			return Result{ps.id, fmt.Errorf("error during the scan process: %s", err), nil}
-		case context.Canceled:
-			return Result{ps.id, fmt.Errorf("scanner teminated: %s", err), nil}
-		case context.DeadlineExceeded:
-			return Result{ps.id, fmt.Errorf("scanner teminated: %s", err), nil}
-		}
-	} else {
-		if len(warnings) > 0 {
-			fmt.Println("warnings: ", warnings)
-		}
-		for _, h := range result.Hosts {
-			ps.host.AddScannedOS(h)
-			ps.host.AddScannedPort(h)
-		}
-	}
-	return Result{ps.id, nil, ps.host}
 }
 
 func ToMap(x interface{}) map[string]string {
