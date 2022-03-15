@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
+	"net"
 )
 
 type scannedPort struct {
@@ -54,76 +57,52 @@ func (sh *scannedHost) AddScannedOS(h Host) {
 
 }
 
+func Subnets(base string, newBits int) ([]string, error) {
+	_, ipnet, err := net.ParseCIDR(base)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing CIDR: %s", err)
+	}
+	if newBits > 32 {
+		return nil, fmt.Errorf("number of bits in netmask cannot be greater than 32")
+	}
+
+	oldMaskLen, _ := ipnet.Mask.Size()
+	if newBits < oldMaskLen {
+		fmt.Println(fmt.Errorf("cannot partition /%d address into %d", oldMaskLen, newBits))
+		return []string{base}, nil
+	}
+
+	oldMaskBin := binary.BigEndian.Uint32(ipnet.Mask)
+	newMaskLen, _ := net.CIDRMask(newBits, 32).Size()
+	hostsNumber := uint32(math.Pow(2, float64(32-newBits)))
+
+	start := binary.BigEndian.Uint32(ipnet.IP)
+	finish := (start & oldMaskBin) | (oldMaskBin ^ 0xffffffff)
+	res := make([]string, 0)
+	for i := start; i <= finish; i += hostsNumber {
+		ip := make(net.IP, 4)
+		binary.BigEndian.PutUint32(ip, i)
+		res = append(res, fmt.Sprintf("%s/%d", ip.String(), newMaskLen))
+	}
+	return res, nil
+}
+
 func main() {
-	// networksList := []string{"192.168.1.29/32", "192.168.1.100/25", "192.168.1.128/25"}
-	networksList := []string{"192.168.1.29/32"}
 	ctx := context.Background()
 
-	netScanResult := []Result{}
-	hostsList := []scannedHost{}
-	wp := NewWorkerPool(1, ctx)
-	go wp.Run(ctx)
-	go wp.StartCollector(ctx, &netScanResult)
-
-	go func() {
-		for _, i := range networksList {
-			wp.jobs <- NewNetworkScanner(ctx, JobID(i), i)
+	//networksList := []string{"192.168.77.111/32", "192.168.77.116/32", "192.168.77.126/32", "192.168.77.118/32"}
+	networksList := []string{"192.168.77.0/24"}
+	partitionedNetworksList := make([]string, 0)
+	for _, i := range networksList {
+		res, err := Subnets(i, 26)
+		if err != nil {
+			fmt.Println(err)
+			return
 		}
-		close(wp.jobs)
-	}()
-	<-wp.Done
-
-	close(wp.results)
-	<-wp.Done
-
-	for _, i := range netScanResult {
-		hostsList = append(hostsList, ToScannedHostList(i.Value)...)
+		partitionedNetworksList = append(partitionedNetworksList, res...)
 	}
-
-	fmt.Println(len(hostsList))
-
-	portScanResult := []Result{}
-	wp = NewWorkerPool(3, ctx)
-	go wp.Run(ctx)
-	go wp.StartCollector(ctx, &portScanResult)
-	for _, h := range hostsList {
-		wp.jobs <- NewPortScanner(ctx, JobID(h.Ipv4Addr), h)
-
-	}
-	close(wp.jobs)
-	<-wp.Done
-	close(wp.results)
-	<-wp.Done
-	fmt.Println(hostsList)
-	fmt.Println(portScanResult)
-
-	// for _, i := range portScanResult {
-	// 	h := ToScannedHost(i.Value)
-	// 	fmt.Println(h.MacAddr, h.Ipv4Addr, h.os, h.ports)
-
-	// }
-
-	// // fmt.Println(portScanResult)
-	// fmt.Println(netScanResult)
-
-	// portScanResult := []Result{}
-	// wp = NewWorkerPool(3, ctx)
-	// go wp.Run(ctx)
-	// go wp.StartCollector(ctx, &portScanResult)
-	// for _, n := range netScanResult {
-	// 	if n.Err != nil {
-	// 		fmt.Println("error in network scan result: ", n.Err)
-	// 	} else {
-	// 		for k, v := range ToMap(n.Value) {
-	// 			fmt.Println(k, v)
-	// 			wp.jobs <- NewPortScanner(ctx, JobID(v), v)
-	// 		}
-	// 	}
-	// }
-	// close(wp.jobs)
-	// <-wp.Done
-	// close(wp.results)
-	// <-wp.Done
-	// fmt.Println(portScanResult)
-
+	h := NewNetworkScannerPool(ctx, 1, partitionedNetworksList)
+	fmt.Println(h)
+	p := NewPortScannerPool(ctx, 16, h)
+	fmt.Println(p)
 }
