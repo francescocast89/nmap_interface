@@ -43,18 +43,14 @@ func NewScannedHost(h Host) *scannedHost {
 
 func (sh *scannedHost) AddScannedPort(h Host) {
 	for _, p := range h.Ports {
-		//fmt.Printf("%0.d : %s \n", p.ID, p.Service.Name)
 		sh.ports = append(sh.ports, scannedPort{p.ID, p.Service.Name})
 	}
-
 }
 
 func (sh *scannedHost) AddScannedOS(h Host) {
 	for _, o := range h.OS.Matches {
-		//fmt.Printf("%s, %0.d \n", o.Name, o.Accuracy)
 		sh.os = append(sh.os, scannedOS{o.Name, o.Accuracy})
 	}
-
 }
 
 func Subnets(base string, newBits int) ([]string, error) {
@@ -101,8 +97,8 @@ func main() {
 		}
 		partitionedNetworksList = append(partitionedNetworksList, res...)
 	}
-	h := NewNetworkScannerPool(ctx, 1, partitionedNetworksList)
+	h := NewNetworkScannerPool(ctx, 4, partitionedNetworksList)
 	fmt.Println(h)
-	p := NewPortScannerPool(ctx, 16, h)
-	fmt.Println(p)
+	// p := NewPortScannerPool(ctx, 16, h)
+	// fmt.Println(p)
 }

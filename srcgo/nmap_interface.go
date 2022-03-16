@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 var ErrScanTimeout = errors.New("nmap scan timed out")
@@ -174,7 +176,6 @@ func (s *Scanner) Run() (result *Run, warnings []string, err error) {
 	)
 	args := append(s.args, defaultArgs...)
 	s.cmd = exec.Command(s.path, args...)
-
 	s.cmd.Stdout = &stdout
 	s.cmd.Stderr = &stderr
 	if err := s.cmd.Start(); err != nil {
@@ -187,12 +188,78 @@ func (s *Scanner) Run() (result *Run, warnings []string, err error) {
 	}()
 
 	select {
-
 	case <-s.ctx.Done():
 		_ = s.cmd.Process.Kill()
 		return nil, warnings, s.ctx.Err()
 
 	case <-done:
+		if stderr.Len() > 0 {
+			warnings = strings.Split(strings.Trim(stderr.String(), "\n"), "\n")
+		}
+		result, err := Parse(stdout.Bytes())
+		if err != nil {
+			return nil, warnings, fmt.Errorf("error during the xml parsing: %s", err)
+		}
+		if s.portFilter != nil {
+			result = choosePorts(result, s.portFilter)
+		}
+		if s.hostFilter != nil {
+			result = chooseHosts(result, s.hostFilter)
+		}
+
+		return result, warnings, nil
+	}
+}
+
+func (s *Scanner) RunWithProgress(liveProgress chan<- float32) (result *Run, warnings []string, err error) {
+	var (
+		stdout, stderr bytes.Buffer
+	)
+	args := append(s.args, defaultArgs...)
+	args = append(args, "--stats-every", "1s")
+	s.cmd = exec.Command(s.path, args...)
+
+	s.cmd.Stdout = &stdout
+	s.cmd.Stderr = &stderr
+	if err := s.cmd.Start(); err != nil {
+		return nil, nil, fmt.Errorf("error during start: %s", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.cmd.Wait()
+	}()
+
+	doneProgress := make(chan bool, 1)
+	go func() {
+		type progress struct {
+			TaskProgress []TaskProgress `xml:"taskprogress" json:"task_progress"`
+		}
+		p := &progress{}
+		for {
+			select {
+			case <-doneProgress:
+				close(liveProgress)
+				return
+			default:
+				time.Sleep(time.Second)
+				_ = xml.Unmarshal(stdout.Bytes(), p)
+				if len(p.TaskProgress) > 0 {
+					liveProgress <- p.TaskProgress[len(p.TaskProgress)-1].Percent
+				}
+			}
+		}
+	}()
+
+	select {
+
+	case <-s.ctx.Done():
+		_ = s.cmd.Process.Kill()
+		close(doneProgress)
+		return nil, warnings, s.ctx.Err()
+
+	case <-done:
+		close(doneProgress)
 		if stderr.Len() > 0 {
 			warnings = strings.Split(strings.Trim(stderr.String(), "\n"), "\n")
 		}
