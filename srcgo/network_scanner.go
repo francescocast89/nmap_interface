@@ -45,7 +45,7 @@ func (ns *NetworkScanner) Execute() Result {
 		case context.Canceled:
 			return Result{ns.id, fmt.Errorf("scanner teminated: %s", err), ns.netAddr}
 		case context.DeadlineExceeded:
-			return Result{ns.id, fmt.Errorf("scanner teminated: %s", err), ns.netAddr}
+			return Result{ns.id, err, ns.netAddr}
 		}
 	} else {
 		if len(warnings) > 0 {

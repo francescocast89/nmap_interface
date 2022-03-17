@@ -41,7 +41,7 @@ func (ps *PortScanner) Execute() Result {
 		case context.Canceled:
 			return Result{ps.id, fmt.Errorf("scanner teminated: %s", err), ps.host}
 		case context.DeadlineExceeded:
-			return Result{ps.id, fmt.Errorf("scanner teminated: %s", err), ps.host}
+			return Result{ps.id, err, ps.host}
 		}
 	} else {
 		if len(warnings) > 0 {
@@ -76,6 +76,7 @@ func NewPortScannerPool(ctx context.Context, numberOfWorkers int, hostList []sca
 	<-wp.Done
 	for _, i := range results {
 		if i.Err != nil {
+			fmt.Println(i.Err)
 			if i.Err == context.DeadlineExceeded {
 				// if the error is the timeout of the context, append the host to the slowHosts list
 				slowHostsList = append(slowHostsList, ToScannedHost(i.Value))
@@ -85,7 +86,7 @@ func NewPortScannerPool(ctx context.Context, numberOfWorkers int, hostList []sca
 		scannedHostsList = append(scannedHostsList, ToScannedHost(i.Value))
 	}
 	// second pool encharged for scanning slow hosts
-	if len(scannedHostsList) > 0 {
+	if len(slowHostsList) > 0 {
 		results := make([]Result, 0)
 		fmt.Println("start to scan slow hosts")
 		wp := NewWorkerPool(numberOfWorkers, ctx)
