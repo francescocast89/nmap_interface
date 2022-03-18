@@ -211,12 +211,12 @@ func (s *Scanner) Run() (result *Run, warnings []string, err error) {
 	}
 }
 
-func (s *Scanner) RunWithProgress(liveProgress chan<- float32) (result *Run, warnings []string, err error) {
+func (s *Scanner) RunWithProgress(liveProgress chan float32, seconds int) (result *Run, warnings []string, err error) {
 	var (
 		stdout, stderr bytes.Buffer
 	)
 	args := append(s.args, defaultArgs...)
-	args = append(args, "--stats-every", "1s")
+	args = append(args, "--stats-every", fmt.Sprintf("%ds", seconds))
 	s.cmd = exec.Command(s.path, args...)
 
 	s.cmd.Stdout = &stdout
@@ -245,7 +245,15 @@ func (s *Scanner) RunWithProgress(liveProgress chan<- float32) (result *Run, war
 				time.Sleep(time.Second)
 				_ = xml.Unmarshal(stdout.Bytes(), p)
 				if len(p.TaskProgress) > 0 {
-					liveProgress <- p.TaskProgress[len(p.TaskProgress)-1].Percent
+					select { //	updatable channel
+					case liveProgress <- p.TaskProgress[len(p.TaskProgress)-1].Percent: // channel was empty - ok
+					default: // channel if full - we have to delete a value from it with some precautions to not get locked in our own channel
+						select {
+						case <-liveProgress: // read stale value and put a fresh one
+							liveProgress <- p.TaskProgress[len(p.TaskProgress)-1].Percent
+						default: // consumer have read it - so skip and not get locked
+						}
+					}
 				}
 			}
 		}

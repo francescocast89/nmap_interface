@@ -6,20 +6,23 @@ import (
 	"time"
 )
 
+const NetworkScannerProgressRefreshSeconds = 10
+
 type NetworkScanner struct {
-	ctx            context.Context
-	id             JobID
-	netAddr        string
-	timingTemplate Timing
-	scanTimeout    time.Duration
+	ctx                 context.Context
+	id                  JobID
+	netAddr             string
+	timingTemplate      Timing
+	scanTimeout         time.Duration
+	liveProgressChannel chan float32
 }
 
-func NewNormalNetworkScanner(ctx context.Context, id JobID, netAddr string) *NetworkScanner {
-	return &NetworkScanner{ctx, id, netAddr, 3, 1 * time.Hour}
+func NewNormalNetworkScanner(ctx context.Context, id JobID, netAddr string, p chan float32) *NetworkScanner {
+	return &NetworkScanner{ctx, id, netAddr, 3, 1 * time.Hour, p}
 }
 
-func NewInsaneNetworkScanner(ctx context.Context, id JobID, netAddr string) *NetworkScanner {
-	return &NetworkScanner{ctx, id, netAddr, 5, 3 * time.Hour}
+func NewInsaneNetworkScanner(ctx context.Context, id JobID, netAddr string, p chan float32) *NetworkScanner {
+	return &NetworkScanner{ctx, id, netAddr, 5, 3 * time.Hour, p}
 }
 
 func (ns *NetworkScanner) Id() JobID {
@@ -37,7 +40,13 @@ func (ns *NetworkScanner) Execute() Result {
 		return Result{ns.id, err, nil}
 	}
 
-	result, warnings, err := s.Run()
+	var result *Run
+	var warnings []string
+	if ns.liveProgressChannel == nil {
+		result, warnings, err = s.Run()
+	} else {
+		result, warnings, err = s.RunWithProgress(ns.liveProgressChannel, NetworkScannerProgressRefreshSeconds)
+	}
 	if err != nil {
 		switch err {
 		default:
@@ -68,17 +77,17 @@ func NewNetworkScannerPool(ctx context.Context, numberOfWorkers int, netList []s
 	// the netwkork addr is appended into a slowNetork list, these networks are scanned by a new pool when the
 	// first one has terminated
 	wp := NewWorkerPool(numberOfWorkers, ctx)
-	go wp.Run(ctx)
-	go wp.Collector(ctx, &results)
+	go wp.run(ctx)
+	go wp.collector(ctx, &results)
 	go func() {
 		for _, i := range netList {
-			wp.jobs <- NewNormalNetworkScanner(ctx, JobID(i), i)
+			wp.jobs <- NewNormalNetworkScanner(ctx, JobID(i), i, nil)
 		}
 		close(wp.jobs)
 	}()
-	<-wp.Done
+	<-wp.WorkersDone
 	close(wp.results)
-	<-wp.Done
+	<-wp.CollectorDone
 	for _, i := range results {
 		if i.Err != nil {
 			if i.Err == context.DeadlineExceeded {
@@ -94,19 +103,19 @@ func NewNetworkScannerPool(ctx context.Context, numberOfWorkers int, netList []s
 		fmt.Println("start to scan slow networks")
 		results := make([]Result, 0)
 		wp := NewWorkerPool(numberOfWorkers, ctx)
-		go wp.Run(ctx)
-		go wp.Collector(ctx, &results)
+		go wp.run(ctx)
+		go wp.collector(ctx, &results)
 
 		go func() {
 			for _, i := range slowNetworksList {
 
-				wp.jobs <- NewInsaneNetworkScanner(ctx, JobID(i), i)
+				wp.jobs <- NewInsaneNetworkScanner(ctx, JobID(i), i, nil)
 			}
 			close(wp.jobs)
 		}()
-		<-wp.Done
+		<-wp.WorkersDone
 		close(wp.results)
-		<-wp.Done
+		<-wp.CollectorDone
 		for _, i := range results {
 			if i.Err != nil {
 				fmt.Println(fmt.Errorf("error during scan of network %s:%s", ToNetworkAddr(i.Value), i.Err))

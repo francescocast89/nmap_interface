@@ -6,20 +6,23 @@ import (
 	"time"
 )
 
+const PortScanScannerProgressRefreshSeconds = 10
+
 type PortScanner struct {
-	ctx            context.Context
-	id             JobID
-	host           scannedHost
-	timingTemplate Timing
-	scanTimeout    time.Duration
+	ctx                 context.Context
+	id                  JobID
+	host                scannedHost
+	timingTemplate      Timing
+	scanTimeout         time.Duration
+	liveProgressChannel chan float32
 }
 
-func NewNormalPortScanner(ctx context.Context, id JobID, host scannedHost) *PortScanner {
-	return &PortScanner{ctx, id, host, 3, 30 * time.Second}
+func NewNormalPortScanner(ctx context.Context, id JobID, host scannedHost, p chan float32) *PortScanner {
+	return &PortScanner{ctx, id, host, 3, 30 * time.Second, p}
 }
 
-func NewInsanePortScanner(ctx context.Context, id JobID, host scannedHost) *PortScanner {
-	return &PortScanner{ctx, id, host, 5, 30 * time.Minute}
+func NewInsanePortScanner(ctx context.Context, id JobID, host scannedHost, p chan float32) *PortScanner {
+	return &PortScanner{ctx, id, host, 5, 30 * time.Minute, p}
 }
 
 func (ps *PortScanner) Id() JobID {
@@ -33,7 +36,15 @@ func (ps *PortScanner) Execute() Result {
 	if err != nil {
 		return Result{ps.id, err, nil}
 	}
-	result, warnings, err := s.Run()
+
+	var result *Run
+	var warnings []string
+	if ps.liveProgressChannel == nil {
+		result, warnings, err = s.Run()
+	} else {
+		result, warnings, err = s.RunWithProgress(ps.liveProgressChannel, PortScanScannerProgressRefreshSeconds)
+	}
+
 	if err != nil {
 		switch err {
 		default:
@@ -56,6 +67,8 @@ func (ps *PortScanner) Execute() Result {
 }
 
 func NewPortScannerPool(ctx context.Context, numberOfWorkers int, hostList []scannedHost) []scannedHost {
+	innerCtx, innerCtxCanc := context.WithCancel(ctx)
+	defer innerCtxCanc()
 	results := make([]Result, 0)
 	scannedHostsList := make([]scannedHost, 0)
 	slowHostsList := make([]scannedHost, 0)
@@ -63,17 +76,22 @@ func NewPortScannerPool(ctx context.Context, numberOfWorkers int, hostList []sca
 	// the host is appended into a slowHosts list, these hosts are scanned by a new pool when the
 	// first one has terminated
 	wp := NewWorkerPool(numberOfWorkers, ctx)
-	go wp.Run(ctx)
-	go wp.Collector(ctx, &results)
+	go wp.run(ctx)
+	go wp.collector(ctx, &results)
+	lpReader := NewLiveProgressReader(ctx, 10*time.Second)
+
 	go func() {
-		for idx, i := range hostList {
-			wp.jobs <- NewNormalPortScanner(ctx, JobID(fmt.Sprintf("%s_%d", i.Ipv4Addr, idx)), i)
+		for _, i := range hostList {
+			ch := make(chan float32)
+			wp.jobs <- NewNormalPortScanner(ctx, JobID(fmt.Sprintf("%s", i.Ipv4Addr)), i, ch)
+			lpReader.AddJobToLiveProgressReader(fmt.Sprintf("%s", i.Ipv4Addr), ch)
 		}
 		close(wp.jobs)
 	}()
-	<-wp.Done
+	go lpReader.PrintCurrentProgress(innerCtx, 10*time.Second)
+	<-wp.WorkersDone
 	close(wp.results)
-	<-wp.Done
+	<-wp.CollectorDone
 	for _, i := range results {
 		if i.Err != nil {
 			fmt.Println(i.Err)
@@ -90,18 +108,21 @@ func NewPortScannerPool(ctx context.Context, numberOfWorkers int, hostList []sca
 		results := make([]Result, 0)
 		fmt.Println("start to scan slow hosts")
 		wp := NewWorkerPool(numberOfWorkers, ctx)
-		go wp.Run(ctx)
-		go wp.Collector(ctx, &results)
-
+		go wp.run(ctx)
+		go wp.collector(ctx, &results)
+		lpReader := NewLiveProgressReader(ctx, 1*time.Second)
 		go func() {
 			for idx, i := range slowHostsList {
-				wp.jobs <- NewInsanePortScanner(ctx, JobID(fmt.Sprintf("%s_%d", i.Ipv4Addr, idx)), i)
+				ch := make(chan float32)
+				wp.jobs <- NewInsanePortScanner(ctx, JobID(fmt.Sprintf("%s_%d", i.Ipv4Addr, idx)), i, ch)
+				lpReader.AddJobToLiveProgressReader(fmt.Sprintf("%s", i.Ipv4Addr), ch)
 			}
 			close(wp.jobs)
 		}()
-		<-wp.Done
+		go lpReader.PrintCurrentProgress(innerCtx, 10*time.Second)
+		<-wp.WorkersDone
 		close(wp.results)
-		<-wp.Done
+		<-wp.CollectorDone
 		for _, i := range results {
 			if i.Err != nil {
 				// if there is an error during this second scan (can also be a timeout error), log the error and continue

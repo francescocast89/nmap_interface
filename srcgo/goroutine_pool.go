@@ -20,23 +20,25 @@ type Result struct {
 }
 
 type WorkerPool struct {
-	workersCount int
-	jobs         chan Job
-	results      chan Result
-	Done         chan bool
+	workersCount  int
+	jobs          chan Job
+	results       chan Result
+	WorkersDone   chan bool
+	CollectorDone chan bool
 }
 
 func NewWorkerPool(wcount int, ctx context.Context) WorkerPool {
 	wp := WorkerPool{
-		workersCount: wcount,
-		jobs:         make(chan Job, wcount),
-		results:      make(chan Result),
-		Done:         make(chan bool),
+		workersCount:  wcount,
+		jobs:          make(chan Job, wcount),
+		results:       make(chan Result),
+		WorkersDone:   make(chan bool),
+		CollectorDone: make(chan bool),
 	}
 	return wp
 }
 
-func (wp WorkerPool) Run(ctx context.Context) {
+func (wp WorkerPool) run(ctx context.Context) {
 	var wg sync.WaitGroup
 
 	for i := 1; i <= wp.workersCount; i++ {
@@ -45,7 +47,7 @@ func (wp WorkerPool) Run(ctx context.Context) {
 	}
 	wg.Wait()
 
-	wp.Done <- true
+	wp.WorkersDone <- true
 }
 
 func (wp WorkerPool) worker(id int, ctx context.Context, wg *sync.WaitGroup) {
@@ -72,14 +74,14 @@ func (wp WorkerPool) worker(id int, ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-func (wp WorkerPool) Collector(ctx context.Context, results *[]Result) {
+func (wp WorkerPool) collector(ctx context.Context, results *[]Result) {
 	fmt.Println("start to collect")
 	for {
 		select {
 		case j, ok := <-wp.results:
 			if !ok {
 				fmt.Printf("collector terminated\n")
-				wp.Done <- true
+				wp.CollectorDone <- true
 				return
 			}
 			*results = append(*results, j)

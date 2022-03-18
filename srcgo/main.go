@@ -86,8 +86,8 @@ func Subnets(base string, newBits int) ([]string, error) {
 func main() {
 	ctx := context.Background()
 
-	//networksList := []string{"192.168.77.111/32", "192.168.77.116/32", "192.168.77.126/32", "192.168.77.118/32"}
-	networksList := []string{"192.168.77.201/32"}
+	networksList := []string{"192.168.77.111/32", "192.168.77.116/32", "192.168.77.126/32", "192.168.77.118/32", "192.168.77.201/32"}
+	//networksList := []string{"192.168.77.0/24"}
 	partitionedNetworksList := make([]string, 0)
 	for _, i := range networksList {
 		res, err := Subnets(i, 26)
@@ -97,8 +97,12 @@ func main() {
 		}
 		partitionedNetworksList = append(partitionedNetworksList, res...)
 	}
-	h := NewNetworkScannerPool(ctx, 1, partitionedNetworksList)
+	h := NewNetworkScannerPool(ctx, 4, partitionedNetworksList)
 	fmt.Println(h)
-	p := NewPortScannerPool(ctx, 1, h)
+	p := NewPortScannerPool(ctx, 4, h)
 	fmt.Println(p)
+
+	for {
+
+	}
 }
